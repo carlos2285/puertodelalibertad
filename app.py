@@ -6,122 +6,121 @@ from shapely.geometry import Point
 from streamlit_folium import st_folium
 import folium
 import plotly.express as px
+import branca
 import os
 
-# ---- CONFIG ----
-POINT_FILE = os.path.join('data','paramapa.xlsx')
-SHAPE_FILE = os.path.join('data','limites.shp')
-DWELLING_COL = 'Uso'            # tipo de uso de parcela (ajústalo si quieres)
-ENC_COL = 'enc'                 # columna en Excel; ajusta si distinta
-POLY_NAME_COL = 'SECTOR'        # nombre del sector dentro del shapefile
+# ---------- Paths ----------
+DATA_FILE = os.path.join('data', 'paramapa_clean.csv')
+SHAPE_FILE = os.path.join('data', 'limites.shp')  # rename if needed
 
-st.set_page_config(page_title='Dashboard Paramapa', layout='wide')
+POINT_LAT = 'p002__Latitude'
+POINT_LON = 'p002__Longitude'
+AREA_NAME_COL = 'SECTOR'  # change to your shapefile field
 
-# ---- LOAD DATA ----
+st.set_page_config(layout='wide', page_title='Dashboard Paramapa v4')
+st.title('Dashboard Paramapa v4')
+
+# ---------- Load data ----------
 @st.cache_resource
 def load_points():
-    df = pd.read_excel(POINT_FILE, sheet_name=0)
-    df = df.dropna(subset=['p002__Latitude','p002__Longitude'])
+    df = pd.read_csv(DATA_FILE)
     gdf = gpd.GeoDataFrame(
         df,
-        geometry=[Point(xy) for xy in zip(df['p002__Longitude'], df['p002__Latitude'])],
+        geometry=[Point(xy) for xy in zip(df[POINT_LON], df[POINT_LAT])],
         crs='EPSG:4326'
     )
     return gdf
 
 @st.cache_resource
-def load_polygons():
+def load_polys():
     if os.path.exists(SHAPE_FILE):
-        poly = gpd.read_file(SHAPE_FILE).to_crs('EPSG:4326')
-        return poly
+        polys = gpd.read_file(SHAPE_FILE).to_crs('EPSG:4326')
+        return polys
     return None
 
 gdf = load_points()
-polygons = load_polygons()
+polys = load_polys()
 
-st.title('Dashboard Paramapa')
+# ---------- Sidebar Filters ----------
+st.sidebar.header('Filtros Geo')
+if polys is not None and AREA_NAME_COL in polys.columns:
+    areas = sorted(polys[AREA_NAME_COL].unique())
+    area_sel = st.sidebar.multiselect('Área', areas, default=areas)
+    polys_sel = polys[polys[AREA_NAME_COL].isin(area_sel)]
+    gdf = gpd.sjoin(gdf, polys_sel, predicate='within')
 
-# ---- SIDEBAR FILTERS ----
-st.sidebar.header('Filtros')
+# Variable selector
+st.sidebar.header('Variable a explorar')
+numeric_cols = gdf.select_dtypes(include=['float','int']).columns.tolist()
+cat_cols = [c for c in gdf.columns if gdf[c].dtype.name == 'category' or gdf[c].dtype == object]
+var = st.sidebar.selectbox('Selecciona variable', numeric_cols + cat_cols)
 
-# Dwelling type filter
-if DWELLING_COL in gdf.columns:
-    dw_vals = sorted(gdf[DWELLING_COL].dropna().unique())
-    sel_dw = st.sidebar.multiselect('Tipo de uso/vivienda', dw_vals, default=dw_vals)
+# ---------- Summary ----------
+st.subheader(f'Distribución de {var}')
+colA, colB = st.columns([2,1])
+
+if var in numeric_cols:
+    # Histogram
+    fig = px.histogram(gdf, x=var, nbins=30, title=f'Histograma de {var}')
+    colA.plotly_chart(fig, use_container_width=True)
 else:
-    sel_dw = gdf[DWELLING_COL].unique() if DWELLING_COL in gdf.columns else []
+    counts = gdf[var].value_counts().reset_index()
+    counts.columns = [var, 'n']
+    fig = px.bar(counts, x=var, y='n', title=f'Frecuencia de {var}')
+    colA.plotly_chart(fig, use_container_width=True)
 
-# enc filter (if exists)
-if ENC_COL in gdf.columns:
-    enc_vals = sorted(gdf[ENC_COL].dropna().unique())
-    sel_enc = st.sidebar.multiselect('Categoría hogar/negocio', enc_vals, default=enc_vals)
-else:
-    sel_enc = []
+# Table preview
+colB.write(gdf[[var]].describe(include='all'))
 
-# polygon filter
-if polygons is not None and POLY_NAME_COL in polygons.columns:
-    area_vals = sorted(polygons[POLY_NAME_COL].unique())
-    sel_area = st.sidebar.multiselect('Área geográfica', area_vals, default=area_vals)
-    polys_sel = polygons[polygons[POLY_NAME_COL].isin(sel_area)]
-else:
-    polys_sel = None
+# ---------- Map ----------
+st.subheader('Mapa interactivo')
+center = [gdf.geometry.y.mean(), gdf.geometry.x.mean()]
+m = folium.Map(location=center, zoom_start=15, tiles='CartoDB positron')
 
-# ---- FILTER DATA ----
-sub = gdf.copy()
-if DWELLING_COL in gdf.columns:
-    sub = sub[sub[DWELLING_COL].isin(sel_dw)]
-if ENC_COL in gdf.columns:
-    sub = sub[sub[ENC_COL].isin(sel_enc)]
-
-if polys_sel is not None and not polys_sel.empty:
-    sub = gpd.sjoin(sub, polys_sel, predicate='within', how='inner')
-
-if sub.empty:
-    st.warning('No hay registros con los filtros seleccionados.')
-    st.stop()
-
-# ---- METRICS ----
-col1,col2,col3=st.columns(3)
-col1.metric('Registros', len(sub))
-if DWELLING_COL in sub.columns:
-    col2.metric('Tipos de uso', sub[DWELLING_COL].nunique())
-if ENC_COL in sub.columns:
-    col3.metric('Categorías', sub[ENC_COL].nunique())
-
-# ---- MAP ----
-center=[sub.geometry.y.mean(), sub.geometry.x.mean()]
-m=folium.Map(location=center, zoom_start=15, tiles='CartoDB positron')
-
-# add polygons layer
-if polys_sel is not None and not polys_sel.empty:
+# Add polygons
+if polys is not None and not polys.empty:
     folium.GeoJson(polys_sel.__geo_interface__, name='Áreas', style_function=lambda x:{
-        'fillColor':'#00000000',
-        'color':'#555555',
-        'weight':1
+        'fillColor':'#00000000','color':'#555','weight':1
     }).add_to(m)
 
-# color mapping
-palette=['#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00']
-color_dict={v:palette[i%len(palette)] for i,v in enumerate(sub[DWELLING_COL].unique())}
+if var in numeric_cols:
+    minv, maxv = gdf[var].min(), gdf[var].max()
+    cmap = branca.colormap.LinearColormap(['blue','lime','yellow','red'], vmin=minv, vmax=maxv)
+    for _, r in gdf.iterrows():
+        folium.CircleMarker(
+            [r.geometry.y, r.geometry.x],
+            radius=4,
+            color=cmap(r[var]),
+            fill=True, fill_opacity=0.8,
+            popup=f'{var}: {r[var]}'
+        ).add_to(m)
+    cmap.add_to(m)
+else:
+    cat_values = gdf[var].unique()
+    palette = px.colors.qualitative.Set3
+    color_dict = {v: palette[i % len(palette)] for i,v in enumerate(cat_values)}
+    legend_html = ''
+    for cat, colr in color_dict.items():
+        legend_html += f'<i style="background:{colr}"></i> {cat}<br>'
+    for _, r in gdf.iterrows():
+        folium.CircleMarker(
+            [r.geometry.y, r.geometry.x],
+            radius=4,
+            color=color_dict.get(r[var],'gray'),
+            fill=True, fill_opacity=0.8,
+            popup=f'{var}: {r[var]}'
+        ).add_to(m)
+    legend = folium.Element(f'''
+        <div style="position: fixed; 
+                    bottom: 50px; left: 50px; width: 150px; height: auto; 
+                    background-color: white; z-index:9999; font-size:14px;
+                    border:2px solid grey; padding: 10px;">
+            <b>{var}</b><br>
+            {legend_html}
+        </div>
+    ''')
+    m.get_root().html.add_child(legend)
 
-for _, r in sub.iterrows():
-    folium.CircleMarker(
-        [r.geometry.y, r.geometry.x],
-        radius=4,
-        color=color_dict.get(r.get(DWELLING_COL),'#3186cc'),
-        fill=True, fill_opacity=0.8,
-        tooltip=f"{POLY_NAME_COL}: {{r.get(POLY_NAME_COL,'')}}"
-    ).add_to(m)
+st_folium(m, use_container_width=True, height=600)
 
-st.subheader('Mapa interactivo')
-st_folium(m, height=600, use_container_width=True)
-
-# ---- TABLE ----
-if DWELLING_COL in sub.columns:
-    st.subheader('Distribución por tipo de uso')
-    tbl=(sub[DWELLING_COL].value_counts()
-         .rename_axis('Tipo').reset_index(name='n'))
-    tbl['%']= (tbl['n']/tbl['n'].sum()*100).round(1)
-    st.dataframe(tbl)
-
-st.caption('© 2025 • Dashboard Paramapa v3')
+st.caption('© 2025 – Dashboard Paramapa v4 (auto-clean)')

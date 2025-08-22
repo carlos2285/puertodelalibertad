@@ -1,36 +1,22 @@
 
-# Dashboard Paramapa
+# Paramapa Dashboard v4
 
-Este repositorio contiene un tablero interactivo construido con **Streamlit** + **Folium** que
-permite explorar el dataset `paramapa.xlsx` mediante filtros, mapa web y gráficas dinámicas.
+Este repositorio incluye:
+* **data/paramapa_clean.csv** — versión depurada del Excel (se eliminaron 20 columnas con >90 % de valores nulos).
+* **data/limites.* ** — shapefile con las áreas de intervención (renombrado).
+* **app.py** — tablero Streamlit con selector dinámico de cualquier variable.
 
-## Estructura
-
-```
-.
-├─ app.py               # Código principal de Streamlit
-├─ requirements.txt     # Dependencias para instalar en Streamlit Cloud o local
-└─ data/
-    └─ paramapa.xlsx    # Base de datos (puedes reemplazarla por una versión actualizada)
-```
-
-## Ejecución local
+## Cómo levantar
 
 ```bash
-# crea entorno
+# local
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-
-# corre la app
 streamlit run app.py
 ```
 
-## Despliegue en Streamlit Community Cloud
-
-1. Haz *fork* o clona este repo y súbelo a tu cuenta de GitHub.
-2. Entra a https://streamlit.io/cloud → **New app** → selecciona el repositorio.
-3. Rama: `main`, archivo principal: `app.py`.
-4. Click **Deploy** y comparte la URL generada.
-
-¡Listo!
+## Despliegue en Streamlit Cloud
+1. Haz **push** de todo el repo a GitHub.
+2. En https://streamlit.io/cloud → **New app** → elige repo, rama y archivo `app.py`.
+3. ¡Listo! URL pública en ~1 min.
